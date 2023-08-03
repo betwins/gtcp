@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -10,9 +11,12 @@ import (
 	"time"
 )
 
-func Client(host string, port, count int, verbose bool) {
+func Client(host string, port, count int, verbose bool, bSendData bool) {
 
-	var connList = make([]net.Conn, 0, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	log.Println("start tcp client...")
+
+	var connList = make([]net.Conn, 0, 1000)
 
 	if host == "" {
 		log.Fatalln("host is not allowed blank")
@@ -34,6 +38,7 @@ func Client(host string, port, count int, verbose bool) {
 				log.Println("connect success", i)
 			}
 			connList = append(connList, conn)
+			go handle(ctx, conn, verbose, bSendData)
 		}
 		fmt.Println("connection establised: ", len(connList))
 	}()
@@ -44,12 +49,54 @@ func Client(host string, port, count int, verbose bool) {
 	log.Println("Get Signal:" + sig.String())
 	log.Println("Quit ...")
 
-	log.Println("Close connections", len(connList))
-	for _, conn := range connList {
-		_ = conn.Close()
-	}
+	log.Println("Close connections count: ", len(connList))
+	cancel()
+	closeAllConn(connList)
 
 	time.Sleep(5 * time.Second)
 
 	log.Println("Quit done")
+}
+
+func closeAllConn(connList []net.Conn) {
+	for _, conn := range connList {
+		_ = conn.Close()
+	}
+	log.Println("close all connection")
+}
+
+func handle(ctx context.Context, conn net.Conn, verbose, bSendData bool) {
+	// create a local context which is canceled when the function returns
+	// close the connection when the context is canceled
+	if !bSendData {
+		return
+	}
+
+	var strData = "kdorkkkkkkkkkkkkkkkkkkkkxoiejrkkkkkkxoxikjekrjioddddddrhhcjkroekckowksiekdirjfkcidkeh"
+	go func() {
+		defer conn.Close()
+
+		totalBytes := 0
+
+		for {
+
+			bytes, err := conn.Write([]byte(strData))
+			if bytes == -1 || err != nil {
+				log.Println("connection was closed, err: ", err.Error())
+				break
+			}
+			//if verbose {
+			//	log.Println("this time send bytes: ", bytes)
+			//}
+			totalBytes = totalBytes + bytes
+		}
+
+		if verbose {
+			log.Println("send bytes: ", totalBytes)
+			log.Println("close connection: ", conn.RemoteAddr())
+		}
+
+	}()
+
+	return
 }
