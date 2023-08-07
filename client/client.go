@@ -11,10 +11,10 @@ import (
 	"time"
 )
 
-func Client(host string, port, count int, verbose bool, bSendData bool) {
+func Client(host string, port, count int, verbose bool, bSendData bool, interval int) {
 
 	ctx, cancel := context.WithCancel(context.Background())
-	log.Println("start tcp client...")
+	log.Println("start tcp client")
 
 	var connList = make([]net.Conn, 0, 1000)
 
@@ -35,11 +35,16 @@ func Client(host string, port, count int, verbose bool, bSendData bool) {
 				continue
 			}
 			if verbose {
-				log.Println("connect success", i)
+				log.Println("new connect success", i)
 			}
 			connList = append(connList, conn)
-			go handle(ctx, conn, verbose, bSendData)
+
 		}
+
+		for _, conn := range connList {
+			go handle(ctx, conn, verbose, bSendData, interval)
+		}
+
 		fmt.Println("connection establised: ", len(connList))
 	}()
 
@@ -65,7 +70,7 @@ func closeAllConn(connList []net.Conn) {
 	log.Println("close all connection")
 }
 
-func handle(ctx context.Context, conn net.Conn, verbose, bSendData bool) {
+func handle(ctx context.Context, conn net.Conn, verbose, bSendData bool, interval int) {
 	// create a local context which is canceled when the function returns
 	// close the connection when the context is canceled
 	if !bSendData {
@@ -89,6 +94,10 @@ func handle(ctx context.Context, conn net.Conn, verbose, bSendData bool) {
 			//	log.Println("this time send bytes: ", bytes)
 			//}
 			totalBytes = totalBytes + bytes
+
+			if interval > 0 {
+				time.Sleep(time.Duration(interval) * time.Millisecond)
+			}
 		}
 
 		if verbose {
