@@ -11,11 +11,22 @@ import (
 	"time"
 )
 
-func Server(host string, port int, verbose bool) {
-	ctx, cancel := context.WithCancel(context.Background())
-	log.Println("start tcp server...")
+type ConnInfo struct {
+	Conn       net.Conn
+	ConnTime   time.Time
+	LastOpTime time.Time
+	Bytes      int
+	Index      int
+}
 
-	var connList = make([]net.Conn, 0, 0)
+var startTime int64
+var rate int64
+
+func Server(host string, port int, verbose bool, verboseDetail bool, bufferSize int) {
+	ctx, cancel := context.WithCancel(context.Background())
+	log.Println("start tcp server v1.0.8")
+
+	var connList = make([]*ConnInfo, 0, 0)
 	go func(ctx context.Context) {
 		var listenAddr string
 		if host != "" {
@@ -28,6 +39,7 @@ func Server(host string, port int, verbose bool) {
 		if err != nil {
 			log.Fatalln("can't listen: ", err.Error())
 		}
+		i := 0
 		for {
 			select {
 			case <-ctx.Done():
@@ -42,8 +54,30 @@ func Server(host string, port int, verbose bool) {
 				if verbose {
 					log.Println("accept new connection:", conn.RemoteAddr())
 				}
-				connList = append(connList, conn)
-				go handle(ctx, conn, verbose)
+
+				//if bufferSize > 0 {
+				//	fd, _ := conn.(*net.TCPConn).File()
+				//	err = syscall.SetsockoptInt(syscall.Handle(fd.Fd()), syscall.SOL_SOCKET, syscall.SO_RCVBUF, bufferSize)
+				//	if err != nil {
+				//		log.Fatalln("set buffer error", err.Error())
+				//	}
+				//}
+
+				if startTime == 0 {
+					startTime = time.Now().UnixMilli()
+				}
+
+				connInfo := ConnInfo{
+					Conn:       conn,
+					ConnTime:   time.Now(),
+					LastOpTime: time.Now(),
+					Bytes:      0,
+					Index:      i,
+				}
+				i++
+
+				connList = append(connList, &connInfo)
+				handle(ctx, &connInfo, verbose, verboseDetail)
 			}
 		}
 	}(ctx)
@@ -52,40 +86,62 @@ func Server(host string, port int, verbose bool) {
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGQUIT)
 	sig := <-signalChan
 	log.Println("Get Signal:" + sig.String())
-	closeAllConn(connList)
 	cancel()
+	closeAllConn(connList)
+	log.Println("all connections was closed")
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGQUIT)
+	sig = <-signalChan
+	log.Println("traffic rate: ", rate, "Mbps")
 	time.Sleep(10 * time.Second)
 	log.Println("Quit Done")
 }
 
-func closeAllConn(connList []net.Conn) {
-	for _, conn := range connList {
-		_ = conn.Close()
+func closeAllConn(connList []*ConnInfo) {
+	var totalBytes int64
+	timeSpend := time.Now().UnixMilli() - startTime
+	for _, connInfo := range connList {
+		totalBytes += int64(connInfo.Bytes)
+		_ = connInfo.Conn.Close()
 	}
+	rate = totalBytes / (timeSpend / 1000) * 8
+	rate = rate / (1024 * 1024)
+	log.Println("close all connection")
 }
 
-func handle(ctx context.Context, conn net.Conn, verbose bool) {
+func handle(ctx context.Context, connInfo *ConnInfo, verbose bool, verboseDetail bool) {
 	// create a local context which is canceled when the function returns
 	// close the connection when the context is canceled
 	go func() {
-		defer conn.Close()
-		totalBytes := 0
-		var buf = make([]byte, 1000)
+		defer connInfo.Conn.Close()
+		var buf = make([]byte, 100000)
 		for {
-			bytes, err := conn.Read(buf)
+			bytes, err := connInfo.Conn.Read(buf)
 			if bytes == -1 || err != nil {
-				log.Println("connection was closed, err:", err.Error())
+				log.Println("connection was closed, err is: ", err.Error())
 				break
+			} else if bytes > 0 {
+				connInfo.LastOpTime = time.Now()
+				connInfo.Bytes = connInfo.Bytes + bytes
+				if verboseDetail {
+					log.Println("read bytes: ", bytes, "for connection: ", connInfo.Index)
+					log.Println("read content: ", string(buf))
+				}
+			} else {
+				log.Println("read zero bytes for connection: ", connInfo)
 			}
+
 			//if verbose {
 			//	log.Println("this time recv bytes: ", bytes)
 			//}
-			totalBytes = totalBytes + bytes
+
 		}
 
 		if verbose {
-			log.Println("recv bytes: ", totalBytes)
-			log.Println("close connection: ", conn.RemoteAddr())
+			log.Println("recv bytes: ", connInfo.Bytes)
+			log.Println("close connection: ", connInfo.Conn.RemoteAddr())
+			log.Println("conn connect time: ", connInfo.ConnTime)
+			log.Println("conn last op time: ", connInfo.LastOpTime)
+			log.Println("conn index: ", connInfo.Index)
 		}
 
 	}()
